@@ -1,0 +1,9 @@
+# Intermediates from the fetch/enrich scripts — regenerate with tools/build_data.py
+list_raw.json
+getlist_raw.txt
+enriched.json
+*.network-response
+
+__pycache__/
+*.pyc
+.DS_Store

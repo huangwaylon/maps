@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Places</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#111417">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Places">
+<meta name="description" content="Search and browse a saved-places list.">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<header class="bar">
+  <div class="search">
+    <svg class="search__icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4a6 6 0 104 10.5l4.3 4.3 1.4-1.4-4.3-4.3A6 6 0 0010 4zm0 2a4 4 0 110 8 4 4 0 010-8z"/></svg>
+    <input id="q" type="search" inputmode="search" enterkeyhint="search"
+           autocomplete="off" autocapitalize="off" spellcheck="false"
+           placeholder="Search 3,238 places" aria-label="Search places">
+    <button id="clear" class="search__clear" type="button" aria-label="Clear search" hidden>&times;</button>
+  </div>
+  <nav class="tabs" role="tablist" aria-label="Views">
+    <button class="tab is-on" role="tab" aria-selected="true"  data-view="list">Browse</button>
+    <button class="tab"       role="tab" aria-selected="false" data-view="ask">Ask</button>
+  </nav>
+</header>
+
+<main>
+  <section id="view-list" class="view is-on">
+    <div class="filters" id="filters"></div>
+    <div class="statusline">
+      <span id="count" aria-live="polite">Loading&hellip;</span>
+      <label class="sort">
+        <span class="sort__label">Sort</span>
+        <select id="sort" aria-label="Sort results">
+          <option value="recent">Recently added</option>
+          <option value="oldest">Oldest first</option>
+          <option value="name">Name A–Z</option>
+          <option value="near">Nearest me</option>
+          <option value="random">Shuffle</option>
+        </select>
+      </label>
+    </div>
+    <ul id="results" class="results"></ul>
+    <div id="sentinel" class="sentinel" aria-hidden="true"></div>
+    <p id="empty" class="empty" hidden>No matches. Try a shorter search, or clear the filters.</p>
+  </section>
+
+  <section id="view-ask" class="view">
+    <div class="ask">
+      <p class="ask__hint" id="askScope">Ask about your places in plain language.</p>
+      <div class="ask__row">
+        <textarea id="askInput" rows="2" placeholder="Where should I get coffee in Shibuya?"
+                  aria-label="Your question"></textarea>
+        <button id="askGo" class="btn" type="button">Ask</button>
+      </div>
+      <div class="ask__examples" id="askExamples"></div>
+      <div id="askOut" class="ask__out" aria-live="polite"></div>
+      <details class="keybox" id="keybox">
+        <summary>API key</summary>
+        <p class="keybox__note">
+          Answers come from Claude. Your key is stored only in this browser's
+          <code>localStorage</code> and is sent directly to <code>api.anthropic.com</code>.
+          Because this page is public, use a key you can rotate.
+        </p>
+        <div class="ask__row">
+          <input id="key" type="password" placeholder="sk-ant-…" autocomplete="off"
+                 spellcheck="false" aria-label="Anthropic API key">
+          <button id="keySave" class="btn btn--ghost" type="button">Save</button>
+        </div>
+        <p class="keybox__note" id="keyState"></p>
+      </details>
+    </div>
+  </section>
+</main>
+
+<div id="sheet" class="sheet" hidden>
+  <div class="sheet__backdrop" data-close></div>
+  <div class="sheet__panel" role="dialog" aria-modal="true" aria-labelledby="sheetName">
+    <button class="sheet__grab" type="button" data-close aria-label="Close"></button>
+    <h2 id="sheetName"></h2>
+    <p id="sheetMeta" class="sheet__meta"></p>
+    <p id="sheetNote" class="sheet__note" hidden></p>
+    <p id="sheetAddr" class="sheet__addr"></p>
+    <div class="sheet__actions">
+      <a id="sheetMap" class="btn" target="_blank" rel="noopener">Open in Maps</a>
+      <button id="sheetCopy" class="btn btn--ghost" type="button">Copy address</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js" type="module"></script>
+</body>
+</html>

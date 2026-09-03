@@ -16,10 +16,10 @@ def list_id_from_url(url):
         if part.startswith("2s") and len(part)>10: return part[2:]
     raise SystemExit("no list id in "+url)
 
-def fetch(list_id,size=5000):
+def fetch(list_id,size=5000,hl="en",gl="us"):
     pb="!1m4!1s%s!2e1!3m1!1e1!2e2!3e2!4i%d!28e2!16b1"%(list_id,size)
     url=("https://www.google.com/maps/preview/entitylist/getlist"
-         "?authuser=0&hl=en&gl=jp&pb="+urllib.parse.quote(pb,safe=''))
+         "?authuser=0&hl=%s&gl=%s&pb="%(hl,gl)+urllib.parse.quote(pb,safe=''))
     raw=subprocess.run(["curl","-s","-A",UA,"-H","Referer: https://www.google.com/maps/",url],
                        capture_output=True,text=True).stdout
     return json.loads(raw[raw.index('['):],strict=False)[0]
