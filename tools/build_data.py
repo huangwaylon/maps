@@ -61,21 +61,13 @@ COUNTRIES = {
     "南アフリカ": "South Africa", "South Africa": "South Africa",
 }
 # English names of Japanese prefectures that show up as a bare address tail.
-JP_TAILS_UNUSED = {
-    "tokyo","osaka","kyoto","hokkaido","okinawa","nagano","kanagawa","chiba",
-    "shizuoka","kagawa","saitama","hyogo","aichi","fukuoka","hiroshima","niigata",
-    "ibaraki","tochigi","gunma","yamanashi","gifu","mie","nara","wakayama",
-    "shiga","fukui","ishikawa","toyama","tottori","shimane","okayama","yamaguchi",
-    "tokushima","ehime","kochi","saga","nagasaki","kumamoto","oita","miyazaki",
-    "kagoshima","aomori","iwate","miyagi","akita","yamagata","fukushima",
-}
 # Romaji aliases so an English query ("shibuya", "kanagawa") matches a kanji
 # address. Google returns Japanese addresses in kanji, so without this the
 # search box only works in Japanese for the ~2,100 places in Japan.
 PREF_ROMAJI = {
     "北海道":"Hokkaido","青森県":"Aomori","岩手県":"Iwate","宮城県":"Miyagi",
     "秋田県":"Akita","山形県":"Yamagata","福島県":"Fukushima","茨城県":"Ibaraki",
-    "栃木県":"Tochigi","群馬県":"Gunma","群馬県":"Gunma","埼玉県":"Saitama",
+    "栃木県":"Tochigi","群馬県":"Gunma","埼玉県":"Saitama",
     "千葉県":"Chiba","東京都":"Tokyo","神奈川県":"Kanagawa","新潟県":"Niigata",
     "富山県":"Toyama","石川県":"Ishikawa","福井県":"Fukui","山梨県":"Yamanashi",
     "長野県":"Nagano","岐阜県":"Gifu","静岡県":"Shizuoka","愛知県":"Aichi",
@@ -121,7 +113,7 @@ US_STATE = re.compile(r'\b([A-Z]{2})\s*$')
 KINDS = [
     ("ramen",      ["ramen","noodles"], ["ラーメン","らーめん","麺屋","中華そば","つけ麺","担々"]),
     ("sushi",      ["sushi"],           ["寿司","鮨","すし","海鮮","魚"]),
-    ("cafe",       ["cafe","café","coffee","roaster","roastery","espresso","tea"],
+    ("cafe",       ["cafe","coffee","roaster","roastery","espresso","tea"],
                                         ["カフェ","珈琲","喫茶","焙煎","茶房","紅茶"]),
     ("bakery",     ["bakery","boulangerie","bread"], ["ベーカリー","パン屋","製パン"]),
     ("sweets",     ["gelato","dessert","patisserie","chocolate","ice cream"],
@@ -145,15 +137,60 @@ KINDS = [
                                         ["市場","商店","書店","雑貨","百貨店","土産"]),
     ("restaurant", ["restaurant","kitchen","dining","bistro","trattoria","osteria","pizza","pizzeria",
                     "burger","tacos","taco","grill","eatery","ristorante"],
-                                        ["レス��ラン","食堂","料理","割烹","定食","天ぷら","とんかつ","餃子","ピザ","タコス"]),
+                                        ["レストラン","食堂","料理","割烹","定食","天ぷら","とんかつ","餃子","ピザ","タコス"]),
 ]
 
 def fold(s):
-    """NFKC + casefold + strip accents, so 'Café'/'ＣＡＦＥ'/'cafe' all match."""
-    if not s: return ""
+    """NFKC + casefold + strip Latin accents, so 'Café'/'ＣＡＦＥ'/'cafe' all match.
+
+    Only U+0300-U+036F (Latin combining diacritics) are stripped. Dropping every
+    Mn character also removes the Japanese voicing marks U+3099/U+309A, which
+    turns ベーカリー into ヘーカリー and makes every voiced-kana keyword below
+    unmatchable. NFC at the end recomposes, keeping the string length stable.
+    """
+    if not s:
+        return ""
     s = unicodedata.normalize("NFKC", s).casefold()
-    return "".join(c for c in unicodedata.normalize("NFD", s)
-                   if unicodedata.category(c) != "Mn")
+    s = "".join(c for c in unicodedata.normalize("NFD", s)
+                if not 0x0300 <= ord(c) <= 0x036F)
+    return unicodedata.normalize("NFC", s)
+
+# Real Google categories are far better than name keywords, so map those first
+# and fall back to the keyword guess only when a place has no category.
+CATEGORY_KIND = [
+    ("ramen",      ["ramen", "noodle"]),
+    ("sushi",      ["sushi", "seafood", "fish"]),
+    ("cafe",       ["cafe", "coffee", "espresso", "tea house", "tea room"]),
+    ("bakery",     ["bakery", "patisserie", "bread"]),
+    ("sweets",     ["dessert", "ice cream", "confection", "sweets", "chocolate", "gelato", "cake"]),
+    ("bar",        ["bar", "pub", "brewery", "izakaya", "beer", "wine", "sake", "cocktail", "nightclub"]),
+    ("yakiniku",   ["barbecue", "yakiniku", "steak", "grill"]),
+    ("curry",      ["curry"]),
+    ("soba_udon",  ["soba", "udon", "noodle shop"]),
+    ("onsen",      ["onsen", "hot spring", "spa", "sauna", "public bath", "bath house"]),
+    ("lodging",    ["hotel", "ryokan", "hostel", "inn", "lodging", "resort", "campground", "guest house"]),
+    ("shrine",     ["shrine", "temple", "church", "buddhist", "shinto", "place of worship"]),
+    ("nature",     ["park", "garden", "beach", "mountain", "lake", "waterfall", "trail", "forest",
+                    "island", "national reserve", "scenic", "campground", "hiking"]),
+    ("museum",     ["museum", "art gallery", "aquarium", "zoo", "gallery", "observatory"]),
+    ("station",    ["station", "airport", "port", "transit", "bus stop"]),
+    ("shop",       ["store", "shop", "market", "boutique", "supermarket", "bookstore"]),
+    ("restaurant", ["restaurant", "food", "diner", "bistro", "eatery", "cafeteria", "izakaya"]),
+]
+
+# Fold the keyword tables once, so a folded haystack is compared against folded
+# needles. Without this every CJK keyword with a voiced kana never matches.
+KINDS = [(k, [fold(x) for x in a], [fold(x) for x in c]) for k, a, c in KINDS]
+CATEGORY_KIND = [(k, [fold(x) for x in v]) for k, v in CATEGORY_KIND]
+
+
+def kind_from_category(cat):
+    """Map a Google category string to one of our coarse kinds, or None."""
+    c = fold(cat)
+    for kind, keys in CATEGORY_KIND:
+        if any(k in c for k in keys):
+            return kind
+    return None
 
 def guess_kind(name):
     hay = fold(name)
@@ -214,7 +251,6 @@ def derive(p):
         "by": p.get("added_by"),
         "m":  p.get("note"),
         "ma": p.get("note_author"),
-        "r":  [x["emoji"] for x in (p.get("reactions") or [])] or None,
         "c":  country,
         "s":  region,
         "ct": city,
@@ -224,24 +260,143 @@ def derive(p):
                   PREF_ROMAJI.get(region or ""), CITY_ROMAJI.get(city or "")) if x)) or None,
     }
 
+def load_details():
+    """Read data/details.jsonl (if present) into {key: record}. Missing file is fine."""
+    path = "data/details.jsonl"
+    if not os.path.exists(path):
+        print("no details.jsonl yet — building without rich fields", file=sys.stderr)
+        return {}
+    out = {}
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line, strict=False)
+            except ValueError:
+                continue  # tolerate a torn final line from an interrupted run
+            if rec.get("error"):
+                continue
+            for k in (rec.get("gid"), rec.get("fid"), rec.get("key")):
+                if k:
+                    out.setdefault(k, rec)
+    return out
+
+
+def detail_for(place, details):
+    return details.get(place.get("gid")) or details.get(place.get("fid"))
+
+
+SHARD_SIZE = 250   # places per detail shard; ~13 files, each a small fetch
+
+
+def first(seq):
+    return seq[0] if isinstance(seq, list) and seq else None
+
+
+def shard_record(det):
+    """Compact per-place detail, English with Japanese only where it differs."""
+    en, ja = det.get("en") or {}, det.get("ja") or {}
+    keep = lambda a, b: b if (b and b != a) else None
+    return {k: v for k, v in {
+        "a":    en.get("address"),
+        "aj":   keep(en.get("address"), ja.get("address")),
+        "nb":   en.get("neighborhood"),
+        "cat":  en.get("categories") or None,
+        "catj": keep(en.get("categories"), ja.get("categories")),
+        "rt":   en.get("rating"),
+        "rc":   en.get("review_count"),
+        "ph":   en.get("phone"),
+        "w":    en.get("website"),
+        "ht":   en.get("hours_today") or None,
+        "st":   en.get("status"),
+        "stj":  keep(en.get("status"), ja.get("status")),
+        "tz":   en.get("timezone"),
+        "img":  (en.get("photo_urls") or [None])[0],
+        "book": (en.get("booking_links") or [None])[0],
+    }.items() if v not in (None, [], "")}
+
+
 def main():
     lid = list_id_from_url(SHORTLINK)
     print("list:", lid, file=sys.stderr)
     src = normalize(fetch(lid))
+    details = load_details()
+    print("details loaded for %d places" % len({id(v) for v in details.values()}),
+          file=sys.stderr)
+
     places = [derive(p) for p in src["places"]]
+    for place, raw in zip(places, src["places"]):
+        place["_gid"], place["_fid"] = raw.get("gid"), raw.get("fid")
     places.sort(key=lambda p: p["t"] or "", reverse=True)
+
+    # Intern category strings: they repeat heavily across 3k places, and an
+    # index costs a few bytes where the string costs tens.
+    cats, cat_index = [], {}
+    shards, enriched = {}, 0
+
+    for i, place in enumerate(places):
+        # Pop both before looking up: `a or b` short-circuits, so popping
+        # inside the expression leaves the second key in the payload.
+        gid, fid = place.pop("_gid", None), place.pop("_fid", None)
+        det = details.get(gid) or details.get(fid)
+        address = place.pop("a", None)
+
+        if det:
+            enriched += 1
+            rec = shard_record(det)
+            rec.setdefault("a", address)
+            primary = first(rec.get("cat"))
+            if primary:
+                if primary not in cat_index:
+                    cat_index[primary] = len(cats)
+                    cats.append(primary)
+                place["ci"] = cat_index[primary]
+                kind = kind_from_category(primary)
+                if kind:
+                    place["k"] = kind
+            if rec.get("rt"):
+                place["rt"] = rec["rt"]
+        else:
+            rec = {"a": address} if address else {}
+
+        if rec:
+            shards.setdefault(i // SHARD_SIZE, {})[str(i)] = rec
+
+    # Precomputed name order: localeCompare over 3k rows costs ~170ms on a
+    # throttled phone, and it never changes, so do it here instead.
+    # Unnamed places sort last rather than first under an empty-string key.
+    name_order = sorted(range(len(places)),
+                        key=lambda i: (not places[i]["n"], (places[i]["n"] or "").casefold()))
+
+    os.makedirs("data/details", exist_ok=True)
+    for old in os.listdir("data/details"):
+        os.remove(os.path.join("data/details", old))
+    for shard, rec in shards.items():
+        with open("data/details/%03d.json" % shard, "w") as f:
+            json.dump(rec, f, ensure_ascii=False, separators=(",", ":"))
+
     out = {
         "list_name": src["list_name"],
         "owner": src["owner"],
         "count": len(places),
         "modified": src["modified"],
+        "shard_size": SHARD_SIZE,
+        "categories": cats,
+        "name_order": name_order,
         "places": places,
     }
-    os.makedirs("data", exist_ok=True)
     with open("data/places.json", "w") as f:
         json.dump(out, f, ensure_ascii=False, separators=(",", ":"))
-    print("wrote data/places.json: %d places, %.0f KB"
-          % (len(places), os.path.getsize("data/places.json") / 1024), file=sys.stderr)
+
+    kb = lambda path: os.path.getsize(path) / 1024
+    shard_kb = sum(kb("data/details/" + f) for f in os.listdir("data/details"))
+    print("wrote data/places.json: %d places, %.0f KB (%d enriched, %d categories)"
+          % (len(places), kb("data/places.json"), enriched, len(cats)), file=sys.stderr)
+    print("wrote %d detail shards: %.0f KB total"
+          % (len(shards), shard_kb), file=sys.stderr)
+
 
 if __name__ == "__main__":
     main()

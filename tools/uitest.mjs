@@ -26,8 +26,20 @@ for (let i = 0; i < 40; i++) {
   await sleep(250);
 }
 if (!target) throw new Error('could not get a CDP page target');
+// Make sure a failure below never leaves the headless Chrome behind.
+process.on('exit', () => chrome.kill());
 const ws = new WebSocket(target.webSocketDebuggerUrl);
-await new Promise(r => ws.addEventListener('open', r));
+// Fail loudly instead of hanging forever if the socket never opens.
+await new Promise((res, rej) => {
+  const timer = setTimeout(
+    () => rej(new Error(`CDP websocket did not open within 10s: ${target.webSocketDebuggerUrl}`)),
+    10000);
+  ws.addEventListener('open', () => { clearTimeout(timer); res(); });
+  ws.addEventListener('error', (e) => {
+    clearTimeout(timer);
+    rej(new Error('CDP websocket error: ' + (e.message || e.type)));
+  });
+});
 let id = 0; const pending = new Map();
 ws.addEventListener('message', (e) => {
   const m = JSON.parse(e.data);
@@ -42,8 +54,17 @@ ws.addEventListener('message', (e) => {
       m.params.args.map((a) => a.value ?? a.description).join(' '));
   }
 });
-const cmd = (method, params = {}) => new Promise(res => {
-  const myId = ++id; pending.set(myId, res);
+// Reject on CDP-level errors so a bad navigate/expression fails the run instead
+// of silently screenshotting a blank page.
+const cmd = (method, params = {}) => new Promise((res, rej) => {
+  const myId = ++id;
+  pending.set(myId, (m) => {
+    if (m.error) {
+      rej(new Error(`CDP ${method} failed: ${JSON.stringify(m.error)}`));
+      return;
+    }
+    res(m);
+  });
   ws.send(JSON.stringify({ id: myId, method, params }));
 });
 const evalJs = async (expr, awaitPromise = false) => {

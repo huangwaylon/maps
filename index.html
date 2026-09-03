@@ -10,6 +10,7 @@
 <meta name="apple-mobile-web-app-title" content="Places">
 <meta name="description" content="Search and browse a saved-places list.">
 <link rel="stylesheet" href="app.css">
+<link rel="preload" href="data/places.json" as="fetch" crossorigin>
 </head>
 <body>
 
@@ -18,17 +19,19 @@
     <svg class="search__icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4a6 6 0 104 10.5l4.3 4.3 1.4-1.4-4.3-4.3A6 6 0 0010 4zm0 2a4 4 0 110 8 4 4 0 010-8z"/></svg>
     <input id="q" type="search" inputmode="search" enterkeyhint="search"
            autocomplete="off" autocapitalize="off" spellcheck="false"
-           placeholder="Search 3,238 places" aria-label="Search places">
+           placeholder="Search places" aria-label="Search places">
     <button id="clear" class="search__clear" type="button" aria-label="Clear search" hidden>&times;</button>
   </div>
   <nav class="tabs" role="tablist" aria-label="Views">
-    <button class="tab is-on" role="tab" aria-selected="true"  data-view="list">Browse</button>
-    <button class="tab"       role="tab" aria-selected="false" data-view="ask">Ask</button>
+    <button class="tab is-on" id="tab-list" role="tab" aria-selected="true"
+            aria-controls="view-list" data-view="list">Browse</button>
+    <button class="tab" id="tab-ask" role="tab" aria-selected="false" tabindex="-1"
+            aria-controls="view-ask" data-view="ask">Ask</button>
   </nav>
 </header>
 
-<main>
-  <section id="view-list" class="view is-on">
+<main id="main">
+  <section id="view-list" class="view is-on" role="tabpanel" aria-labelledby="tab-list">
     <div class="filters" id="filters"></div>
     <div class="statusline">
       <span id="count" aria-live="polite">Loading&hellip;</span>
@@ -48,7 +51,7 @@
     <p id="empty" class="empty" hidden>No matches. Try a shorter search, or clear the filters.</p>
   </section>
 
-  <section id="view-ask" class="view">
+  <section id="view-ask" class="view" role="tabpanel" aria-labelledby="tab-ask">
     <div class="ask">
       <p class="ask__hint" id="askScope">Ask about your places in plain language.</p>
       <div class="ask__row">
@@ -81,11 +84,14 @@
 <div id="sheet" class="sheet" hidden>
   <div class="sheet__backdrop" data-close></div>
   <div class="sheet__panel" role="dialog" aria-modal="true" aria-labelledby="sheetName">
-    <button class="sheet__grab" type="button" data-close aria-label="Close"></button>
-    <h2 id="sheetName"></h2>
+    <button class="sheet__close" type="button" data-close aria-label="Close details">
+      <span class="sheet__grab" aria-hidden="true"></span>
+    </button>
+    <h2 id="sheetName" tabindex="-1"></h2>
     <p id="sheetMeta" class="sheet__meta"></p>
     <p id="sheetNote" class="sheet__note" hidden></p>
     <p id="sheetAddr" class="sheet__addr"></p>
+    <dl id="sheetFacts" class="facts"></dl>
     <div class="sheet__actions">
       <a id="sheetMap" class="btn" target="_blank" rel="noopener">Open in Maps</a>
       <button id="sheetCopy" class="btn btn--ghost" type="button">Copy address</button>

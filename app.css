@@ -18,7 +18,6 @@
   --radius: 14px;
   --tap: 44px;
   --pad: 16px;
-  --bar-h: 104px;
   --safe-t: env(safe-area-inset-top, 0px);
   --safe-b: env(safe-area-inset-bottom, 0px);
   --font: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
@@ -87,8 +86,8 @@ body {
 .search input::-webkit-search-cancel-button { display: none; }
 
 .search__clear {
-  position: absolute; right: 4px;
-  width: 36px; height: 36px;
+  position: absolute; right: 2px;
+  width: var(--tap); height: var(--tap);
   display: grid; place-items: center;
   font-size: 22px; line-height: 1;
   color: var(--ink-faint);
@@ -132,7 +131,7 @@ body {
 .chip {
   flex: 0 0 auto;
   scroll-snap-align: start;
-  min-height: 34px;
+  min-height: 38px;
   padding: 0 13px;
   font: inherit; font-size: 14px; white-space: nowrap;
   color: var(--ink-dim);
@@ -174,6 +173,10 @@ body {
 
 .card {
   display: block;
+  /* Thousands of rows accumulate as the user pages; this keeps off-screen ones
+     out of layout and paint. The size hint avoids scrollbar jumping. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 72px;
   width: 100%;
   text-align: left;
   padding: 12px 0;
@@ -207,6 +210,8 @@ body {
   padding-left: 8px;
   overflow-wrap: anywhere;
 }
+.rating { font-size: 13px; color: var(--ink-dim); font-variant-numeric: tabular-nums; }
+
 .tag {
   font-size: 11px; font-weight: 600; letter-spacing: .02em;
   text-transform: uppercase;
@@ -290,10 +295,14 @@ body {
 @keyframes rise { from { transform: translateY(14px); opacity: .6; } }
 @media (prefers-reduced-motion: reduce) { .sheet__panel { animation: none; } }
 
+.sheet__close {
+  display: block; width: 100%; min-height: var(--tap);
+  margin: 0 0 4px; padding: 0;
+  background: none; border: 0; cursor: pointer;
+}
 .sheet__grab {
-  display: block; width: 40px; height: 5px; margin: 6px auto 12px;
-  padding: 0; border: 0; border-radius: 99px;
-  background: var(--line); cursor: pointer;
+  display: block; width: 40px; height: 5px; margin: 0 auto;
+  border-radius: 99px; background: var(--line);
 }
 .sheet__panel h2 { margin: 0; font-size: 20px; line-height: 1.25; overflow-wrap: anywhere; }
 .sheet__meta {
@@ -307,6 +316,17 @@ body {
   font-size: 15px; overflow-wrap: anywhere;
 }
 .sheet__addr { margin: 12px 0 0; font-size: 14px; color: var(--ink-dim); overflow-wrap: anywhere; }
+.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+  margin: 14px 0 0;
+  font-size: 14px;
+}
+.facts dt { color: var(--ink-faint); }
+.facts dd { margin: 0; overflow-wrap: anywhere; }
+.facts a { color: var(--accent); }
+
 .sheet__actions { display: flex; gap: 8px; margin-top: 18px; }
 .sheet__actions .btn { flex: 1 1 auto; }
 

@@ -1,6 +1,10 @@
-# Intermediates from the fetch/enrich scripts — regenerate with tools/build_data.py
+# Intermediates from the fetch/extract scripts. All are regenerable:
+#   python3 tools/fetch_list.py <shortlink>   -> list_raw.json
+#   python3 tools/extract_details.py          -> data/details.jsonl  (~45 min)
+#   python3 tools/build_data.py               -> data/places.json + data/details/
 list_raw.json
 getlist_raw.txt
+data/details.jsonl
 enriched.json
 *.network-response
 
