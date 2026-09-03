@@ -9,9 +9,9 @@ import json,subprocess,urllib.parse,re,html,sys,time
 UA=("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 
-def curl(url):
+def curl(url,accept_lang="en-US,en;q=0.9"):
     return subprocess.run(["curl","-s","--max-time","30","-A",UA,
-                           "-H","Accept-Language: en-US,en;q=0.9",
+                           "-H","Accept-Language: "+accept_lang,
                            "-H","Referer: https://www.google.com/maps/",url],
                           capture_output=True,text=True).stdout
 
@@ -20,12 +20,18 @@ def hexfid(fid):
     a,b=fid.split(':'); u=lambda v:(int(v)+(1<<64))%(1<<64)
     return "0x%x:0x%x"%(u(a),u(b))
 
-def fetch(fid,lat,lng):
-    page=curl("https://www.google.com/maps/place/data=!4m5!3m4!1s%s!8m2!3d%s!4d%s?hl=en&gl=us"
-              %(hexfid(fid),lat,lng))
+# Accept-Language headers per UI language; the RPC honours both the header and
+# the hl/gl query params, so we set them consistently.
+ACCEPT_LANG={"en":"en-US,en;q=0.9","ja":"ja,en-US;q=0.9,en;q=0.8"}
+
+def fetch(fid,lat,lng,hl="en",gl="us"):
+    """Fetch the place doc. Defaults to English/US so existing callers are unaffected."""
+    al=ACCEPT_LANG.get(hl,hl+",en;q=0.9")
+    page=curl("https://www.google.com/maps/place/data=!4m5!3m4!1s%s!8m2!3d%s!4d%s?hl=%s&gl=%s"
+              %(hexfid(fid),lat,lng,hl,gl),al)
     m=re.search(r'<link href="(/maps/preview/place\?[^"]+)"',page)
     if not m: return None
-    raw=curl("https://www.google.com"+html.unescape(m.group(1)))
+    raw=curl("https://www.google.com"+html.unescape(m.group(1)),al)
     if '[' not in raw: return None
     return json.loads(raw[raw.index('['):],strict=False)
 

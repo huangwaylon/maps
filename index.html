@@ -61,13 +61,15 @@
       <details class="keybox" id="keybox">
         <summary>API key</summary>
         <p class="keybox__note">
-          Answers come from Claude. Your key is stored only in this browser's
-          <code>localStorage</code> and is sent directly to <code>api.anthropic.com</code>.
-          Because this page is public, use a key you can rotate.
+          Paste a <strong>Gemini</strong> key (from Google AI Studio) or an
+          <strong>Anthropic</strong> key — the provider is detected from the key
+          itself. It is stored only in this browser's <code>localStorage</code>
+          and sent straight to the provider. It is never committed to the repo,
+          but this page is public, so use a key you can rotate.
         </p>
         <div class="ask__row">
-          <input id="key" type="password" placeholder="sk-ant-…" autocomplete="off"
-                 spellcheck="false" aria-label="Anthropic API key">
+          <input id="key" type="password" placeholder="AIza… or sk-ant-…" autocomplete="off"
+                 spellcheck="false" aria-label="API key">
           <button id="keySave" class="btn btn--ghost" type="button">Save</button>
         </div>
         <p class="keybox__note" id="keyState"></p>

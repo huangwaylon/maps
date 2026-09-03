@@ -1,10 +1,11 @@
-// Static client for a saved-places list. No build step, no runtime deps except
-// the Anthropic SDK, which is imported lazily and only when Ask is used.
+// Static client for a saved-places list. No build step. Gemini needs no SDK
+// (plain fetch + SSE); the Anthropic SDK is imported lazily, and only if an
+// Anthropic key is the one in use.
 
 const DATA_URL = 'data/places.json';
 const PAGE = 40;                       // rows appended per scroll batch
-const MODEL = 'claude-opus-5';
 const MAX_CONTEXT_PLACES = 60;         // places sent to the model per question
+const REQUEST_TIMEOUT_MS = 60000;      // per-attempt cap; free tiers can stall
 
 const $ = (id) => document.getElementById(id);
 
@@ -288,27 +289,164 @@ function closeSheet() {
   document.body.style.overflow = '';
 }
 
-// ---------------------------------------------------------------- ask (Claude)
+// ---------------------------------------------------------------- ask (LLM)
 
-const KEY_STORE = 'places.anthropicKey';
-let sdk = null;
+// One key field, provider inferred from its prefix. The key lives only in this
+// browser's localStorage — it is never committed to the repo.
+const KEY_STORE = 'places.llmKey';
+
+const SYSTEM = `You help someone search their own saved-places list.
+
+You will be given a numbered subset of their saved places. Answer using only
+those places — never invent a place, an address, an opening time, a rating or a
+price, and never claim a place has a property (wifi, laptop-friendly, open late)
+unless a note says so. If the answer is not in the list, say so in one sentence
+and suggest a different search term or filter.
+
+Keep answers short and conversational: two or three sentences, or a short list
+when recommending several places. Name each place exactly as it appears in the
+list so it can be found again. Mention a place's note when it explains why it
+was saved. Do not repeat the whole list back.`;
+
+function providerFor(key) {
+  return key.startsWith('sk-ant-') ? 'anthropic' : 'gemini';
+}
+
+const PROVIDERS = {
+  gemini: {
+    label: 'Gemini',
+    // Chosen by probing the key: the /models listing advertises models that
+    // 404 on call (gemini-2.5-flash tells new keys to use 3.6), so this is
+    // pinned to one that actually answers.
+    model: 'gemini-3.6-flash',
+    async stream(key, prompt, onText) {
+      const url = 'https://generativelanguage.googleapis.com/v1beta/models/'
+        + this.model + ':streamGenerateContent?alt=sse';
+      const body = JSON.stringify({
+        systemInstruction: { parts: [{ text: SYSTEM }] },
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: {
+          // Thinking tokens count against maxOutputTokens, so this stays
+          // generous — too low and the answer comes back empty.
+          maxOutputTokens: 2048,
+          thinkingConfig: { thinkingLevel: 'low' },
+        },
+      });
+
+      // Free-tier latency is erratic (measured 2s to 90s for identical
+      // prompts), so bound each attempt and retry once on a transient error
+      // rather than leaving the UI stuck on "Asking…" forever.
+      let res;
+      for (let attempt = 0; ; attempt++) {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+        try {
+          res = await fetch(url, {
+            method: 'POST',
+            signal: ctrl.signal,
+            headers: { 'content-type': 'application/json', 'x-goog-api-key': key },
+            body,
+          });
+        } catch (e) {
+          clearTimeout(timer);
+          if (e.name === 'AbortError') {
+            const err = new Error(
+              `The model did not respond within ${REQUEST_TIMEOUT_MS / 1000}s. `
+              + 'The free tier is often slow — try again.');
+            err.status = 504;
+            throw err;
+          }
+          throw e;
+        }
+        clearTimeout(timer);
+        // 503 is "model busy"; one retry usually clears it. 429 is a quota
+        // cap, so retrying immediately would only make it worse.
+        if (res.status === 503 && attempt === 0) {
+          onText('');
+          await new Promise((r) => setTimeout(r, 2000));
+          continue;
+        }
+        break;
+      }
+
+      if (!res.ok) {
+        let detail = `HTTP ${res.status}`;
+        try {
+          const j = await res.json();
+          detail = j.error?.message || detail;
+        } catch { /* non-JSON error body */ }
+        const err = new Error(detail);
+        err.status = res.status;
+        throw err;
+      }
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      const consume = (line) => {
+        if (!line.startsWith('data:')) return;
+        const payload = line.slice(5).trim();
+        if (!payload || payload === '[DONE]') return;
+        let json;
+        try { json = JSON.parse(payload); } catch { return; }
+        const cand = json.candidates?.[0];
+        for (const part of cand?.content?.parts || []) {
+          if (part.text) onText(part.text);
+        }
+        if (cand?.finishReason && cand.finishReason !== 'STOP') {
+          onText(`\n\n[stopped: ${cand.finishReason}]`);
+        }
+      };
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        // Parse line by line rather than on blank-line frame boundaries:
+        // this endpoint does not reliably double-newline-separate its frames,
+        // and splitting on '\n\n' silently swallows the entire response.
+        const lines = buf.split('\n');
+        buf = lines.pop();
+        for (const line of lines) consume(line.trim());
+      }
+      if (buf.trim()) consume(buf.trim()); // final line, no trailing newline
+    },
+  },
+
+  anthropic: {
+    label: 'Claude',
+    model: 'claude-opus-5',
+    sdk: null,
+    async stream(key, prompt, onText) {
+      if (!this.sdk) {
+        const mod = await import('https://esm.sh/@anthropic-ai/sdk@0.123.0');
+        this.sdk = mod.default ?? mod.Anthropic;
+      }
+      const client = new this.sdk({ apiKey: key, dangerouslyAllowBrowser: true });
+      const stream = client.messages.stream({
+        model: this.model,
+        max_tokens: 4096,
+        system: SYSTEM,
+        output_config: { effort: 'low' },
+        messages: [{ role: 'user', content: prompt }],
+      });
+      for await (const event of stream) {
+        if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+          onText(event.delta.text);
+        }
+      }
+      const final = await stream.finalMessage();
+      if (final.stop_reason === 'refusal') {
+        throw new Error('The model declined to answer that. Try rephrasing.');
+      }
+    },
+  },
+};
 
 function keyState() {
   const k = localStorage.getItem(KEY_STORE);
   $('keyState').textContent = k
-    ? `Saved (…${k.slice(-4)}). Clear the field and save to remove it.`
-    : 'No key saved yet.';
+    ? `${PROVIDERS[providerFor(k)].label} key saved (…${k.slice(-4)}). Clear the field and save to remove it.`
+    : 'No key saved yet. A Gemini key or an Anthropic key both work.';
   return k;
-}
-
-async function client() {
-  const key = localStorage.getItem(KEY_STORE);
-  if (!key) throw new Error('no-key');
-  if (!sdk) {
-    const mod = await import('https://esm.sh/@anthropic-ai/sdk@0.123.0');
-    sdk = mod.default ?? mod.Anthropic;
-  }
-  return new sdk({ apiKey: key, dangerouslyAllowBrowser: true });
 }
 
 // Send the current result set (capped) as context. With 3k places the whole
@@ -325,18 +463,6 @@ function contextFor(hits) {
   }).join('\n');
 }
 
-const SYSTEM = `You help someone search their own saved-places list.
-
-You will be given a numbered subset of their saved places. Answer using only
-those places — never invent a place, an address, an opening time, a rating or a
-price. If the answer is not in the list, say so in one sentence and suggest a
-different search term or filter.
-
-Keep answers short and conversational: two or three sentences, or a short list
-when recommending several places. Name each place exactly as it appears in the
-list so it can be found again. Mention a place's note when it explains why it
-was saved. Do not repeat the whole list back.`;
-
 async function ask() {
   const q = $('askInput').value.trim();
   const out = $('askOut');
@@ -347,43 +473,31 @@ async function ask() {
     out.textContent = 'No places in the current view — clear the search or filters first.';
     return;
   }
+  const key = localStorage.getItem(KEY_STORE);
+  if (!key) {
+    out.textContent = 'Add an API key below first.';
+    $('keybox').open = true;
+    return;
+  }
 
+  const provider = PROVIDERS[providerFor(key)];
   $('askGo').disabled = true;
-  out.textContent = 'Thinking…';
+  out.textContent = `Asking ${provider.label}…`;
 
+  const shown = Math.min(hits.length, MAX_CONTEXT_PLACES);
+  const scope = hits.length > shown
+    ? `Here are ${shown} of ${hits.length} matching saved places:`
+    : `Here are the ${shown} saved places in view:`;
+  const prompt = `${scope}\n\n${contextFor(hits)}\n\nQuestion: ${q}`;
+
+  let got = false;
   try {
-    const anthropic = await client();
-    const shown = Math.min(hits.length, MAX_CONTEXT_PLACES);
-    const scope = hits.length > shown
-      ? `Here are ${shown} of ${hits.length} matching saved places:`
-      : `Here are the ${shown} saved places in view:`;
-
-    const stream = anthropic.messages.stream({
-      model: MODEL,
-      max_tokens: 4096,
-      system: SYSTEM,
-      // Adaptive thinking is the default on this model; low effort keeps the
-      // answer fast, which suits short lookup questions.
-      output_config: { effort: 'low' },
-      messages: [{
-        role: 'user',
-        content: `${scope}\n\n${contextFor(hits)}\n\nQuestion: ${q}`,
-      }],
+    await provider.stream(key, prompt, (text) => {
+      if (!got) { out.textContent = ''; got = true; }
+      out.append(text);
     });
-
-    out.textContent = '';
-    let got = false;
-    for await (const event of stream) {
-      if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
-        if (!got) { out.textContent = ''; got = true; }
-        out.append(event.delta.text);
-      }
-    }
-    const final = await stream.finalMessage();
-    if (final.stop_reason === 'refusal') {
-      out.textContent = 'Claude declined to answer that one. Try rephrasing.';
-    } else if (!got) {
-      out.textContent = 'No answer came back. Try again.';
+    if (!got) {
+      out.textContent = 'No answer came back. Try again — the free tier is sometimes busy.';
     } else if (hits.length > shown) {
       const foot = document.createElement('div');
       foot.className = 'cited';
@@ -393,17 +507,25 @@ async function ask() {
   } catch (err) {
     const span = document.createElement('span');
     span.className = 'err';
-    if (err.message === 'no-key') {
-      span.textContent = 'Add an Anthropic API key below first.';
-      $('keybox').open = true;
-    } else if (err.status === 401) {
-      span.textContent = 'That key was rejected (401). Check it and save again.';
+    const msg = String(err.message || err);    if (err.status === 401 || err.status === 403 || /API key/i.test(msg)) {
+      span.textContent = 'That key was rejected. Check it and save again.';
     } else if (err.status === 429) {
-      span.textContent = 'Rate limited (429). Wait a moment and retry.';
+      span.textContent = 'Rate limited — the free tier has a daily cap. Try again later.';
+    } else if (err.status === 503) {
+      span.textContent = 'The model is busy right now (503). Try again in a moment.';
+    } else if (err.status === 504) {
+      span.textContent = msg;
     } else {
-      span.textContent = `Request failed: ${err.message || err}`;
+      span.textContent = msg;
     }
-    out.replaceChildren(span);
+    if (got) {
+      // Keep whatever streamed before the failure.
+      out.append(document.createElement('br'));
+    } else {
+      // Nothing streamed, so drop the "Asking…" placeholder.
+      out.textContent = '';
+    }
+    out.append(span);
   } finally {
     $('askGo').disabled = false;
   }
