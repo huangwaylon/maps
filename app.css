@@ -327,6 +327,42 @@ body {
 .facts dd { margin: 0; overflow-wrap: anywhere; }
 .facts a { color: var(--accent); }
 
+/* ---------- sheet detail blocks ---------- */
+
+.block { margin-top: 20px; }
+.block h3 {
+  margin: 0 0 8px;
+  font-size: 12px; font-weight: 700; letter-spacing: .05em;
+  text-transform: uppercase; color: var(--ink-faint);
+}
+
+.hist { display: flex; flex-direction: column; }
+.hist__row { display: flex; align-items: center; gap: 8px; margin-bottom: 3px; }
+.hist__label { width: 24px; font-size: 12px; color: var(--ink-dim); }
+.hist__bar {
+  flex: 1 1 auto; height: 7px; border-radius: 4px;
+  background: var(--line);
+  position: relative; overflow: hidden;
+}
+.hist__bar::after {
+  content: ''; position: absolute; inset: 0 auto 0 0;
+  width: var(--w, 0%); background: var(--accent); border-radius: 4px;
+}
+.hist__n {
+  min-width: 44px; text-align: right;
+  font-size: 12px; color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.blurb { margin: 0; font-size: 14px; line-height: 1.5; }
+
+.review { margin-bottom: 12px; }
+.review__head { font-size: 12px; color: var(--ink-faint); }
+.review__body {
+  margin: 3px 0 0; font-size: 14px; line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
 .sheet__actions { display: flex; gap: 8px; margin-top: 18px; }
 .sheet__actions .btn { flex: 1 1 auto; }
 

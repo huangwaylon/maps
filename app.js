@@ -9,6 +9,7 @@
 
 const DATA_URL = 'data/places.json';
 const SHARD_URL = (n) => `data/details/${String(n).padStart(3, '0')}.json`;
+const DIGEST_URL = 'data/digest.json';
 const PAGE = 40;                       // rows appended per scroll batch
 const MAX_CONTEXT_PLACES = 40;         // places sent to the model per question
 const REQUEST_TIMEOUT_MS = 60000;      // per-chunk idle cap; free tiers stall
@@ -33,6 +34,8 @@ const state = {
   shardSize: 250,
   details: new Map(),        // place index -> detail record
   shardsLoaded: new Map(),   // shard number -> Promise
+  digest: null,              // place index -> compact text for the model
+  digestLoading: null,
 };
 
 // ---------------------------------------------------------------- text search
@@ -361,6 +364,18 @@ function loadShard(placeIndex) {
   return state.shardsLoaded.get(shard);
 }
 
+// Compact per-place text for the model. A 40-place question can touch every
+// shard, so this is one small file fetched once, the first time Ask is used.
+function loadDigest() {
+  if (!state.digestLoading) {
+    state.digestLoading = fetch(DIGEST_URL)
+      .then((r) => (r.ok ? r.json() : {}))
+      .then((d) => { state.digest = d; })
+      .catch(() => { state.digest = {}; });
+  }
+  return state.digestLoading;
+}
+
 // ---------------------------------------------------------------- detail sheet
 
 function mapsUrl(p) {
@@ -405,10 +420,16 @@ async function openSheet(p, opener) {
 
 function renderSheetDetail(d) {
   $('sheetAddr').textContent = '';
-  if (!d) { $('sheetAddr').textContent = 'No further details saved.'; return; }
+  const facts = $('sheetFacts');
+  const extra = $('sheetExtra');
+  facts.replaceChildren();
+  extra.replaceChildren();
+  if (!d) {
+    $('sheetAddr').textContent = 'No further details saved.';
+    return;
+  }
   setText($('sheetAddr'), d.a || '');
 
-  const facts = $('sheetFacts');
   const add = (label, value, href) => {
     if (!value) return;
     const dt = document.createElement('dt');
@@ -426,12 +447,81 @@ function renderSheetDetail(d) {
     }
     facts.append(dt, dd);
   };
-  add('Reviews', d.rc ? `${d.rc.toLocaleString()} reviews` : '');
-  add('Hours', Array.isArray(d.ht) ? d.ht.join(', ') : d.ht);
-  add('Status', d.st);
-  add('Phone', d.ph, `tel:${String(d.ph).replace(/[^+\d]/g, '')}`);
-  add('Website', new URL(d.w || 'https://x.invalid').hostname.replace(/^www\./, ''), d.w);
+  add('Rated', d.rc ? `${d.rt ?? '—'} from ${d.rc.toLocaleString()} reviews` : null);
+  add('Price', (d.pr || []).join(' / ') || null);
   add('Category', (d.cat || []).join(', '));
+  add('Phone', d.ph, d.ph ? `tel:${String(d.ph).replace(/[^+\d]/g, '')}` : null);
+  if (d.w) {
+    let host = d.w;
+    try { host = new URL(d.w).hostname.replace(/^www\./, ''); } catch { /* keep raw */ }
+    add('Website', host, d.w);
+  }
+
+  // Rating histogram, 5 stars down to 1.
+  if (Array.isArray(d.hist) && d.hist.some(Boolean)) {
+    const peak = Math.max(...d.hist);
+    const box = document.createElement('div');
+    box.className = 'hist';
+    for (let stars = 5; stars >= 1; stars--) {
+      const n = d.hist[stars - 1] || 0;
+      const row = document.createElement('div');
+      row.className = 'hist__row';
+      row.append(Object.assign(document.createElement('span'),
+        { className: 'hist__label', textContent: `${stars}★` }));
+      const bar = document.createElement('span');
+      bar.className = 'hist__bar';
+      bar.style.setProperty('--w', `${peak ? (n / peak) * 100 : 0}%`);
+      row.append(bar);
+      row.append(Object.assign(document.createElement('span'),
+        { className: 'hist__n', textContent: n.toLocaleString() }));
+      box.append(row);
+    }
+    extra.append(section('Ratings', box));
+  }
+
+  if (d.ed) {
+    const p = document.createElement('p');
+    p.className = 'blurb';
+    setText(p, d.ed);
+    extra.append(section('Summary', p));
+  }
+
+  if (Array.isArray(d.hw) && d.hw.length) {
+    const dl = document.createElement('dl');
+    dl.className = 'facts';
+    for (const [day, spans] of d.hw) {
+      dl.append(Object.assign(document.createElement('dt'), { textContent: day }));
+      dl.append(Object.assign(document.createElement('dd'),
+        { textContent: (spans && spans.length) ? spans.join(', ') : 'Closed' }));
+    }
+    extra.append(section('Hours', dl));
+  }
+
+  if (Array.isArray(d.rv) && d.rv.length) {
+    const list = document.createElement('div');
+    for (const r of d.rv) {
+      const item = document.createElement('article');
+      item.className = 'review';
+      const head = document.createElement('div');
+      head.className = 'review__head';
+      head.textContent = [r.a, r.s ? `${r.s}★` : '', r.w].filter(Boolean).join(' · ');
+      item.append(head);
+      const body = document.createElement('p');
+      body.className = 'review__body';
+      setText(body, r.t || '');
+      item.append(body);
+      list.append(item);
+    }
+    extra.append(section('Reviews', list));
+  }
+}
+
+function section(title, body) {
+  const wrap = document.createElement('section');
+  wrap.className = 'block';
+  wrap.append(Object.assign(document.createElement('h3'), { textContent: title }));
+  wrap.append(body);
+  return wrap;
 }
 
 function closeSheet() {
@@ -465,11 +555,16 @@ const KEY_STORE = 'places.llmKey';
 
 const SYSTEM = `You help someone search their own saved-places list.
 
-You will be given a numbered subset of their saved places. Answer using only
-those places — never invent a place, an address, an opening time, a rating or a
-price, and never claim a place has a property (wifi, laptop-friendly, open late)
-unless a note says so. If the answer is not in the list, say so in one sentence
-and suggest a different search term or filter.
+You will be given a numbered subset of their saved places. Each line may carry
+a type, rating, location, price band, opening hours, the user's own note
+(my_note), a short description (about) and one real visitor review (a_review).
+
+Answer using only what those lines say. Never invent a place, an address, an
+opening time, a rating or a price, and never claim a place has a property
+(wifi, laptop-friendly, open late) unless a line supports it. Treat about and
+a_review as evidence you may quote or paraphrase, and say which place it came
+from. If the answer is not in the list, say so in one sentence and suggest a
+different search term or filter.
 
 Keep answers short and conversational: two or three sentences, or a short list
 when recommending several places. Name each place exactly as it appears in the
@@ -633,16 +728,22 @@ function writeKey(v) {
 }
 
 // The visible filter doubles as the retrieval step: 3k places cannot fit in a
-// prompt, so narrow the view and the answer improves.
+// prompt, so narrow the view and the answer improves. The digest supplies the
+// text that actually changes an answer — hours, price, a summary, a real review.
 function contextFor(hits) {
   return hits.slice(0, MAX_CONTEXT_PLACES).map((p, i) => {
+    const d = state.digest?.[p._i] || {};
     const bits = [`${i + 1}. ${p.n}`];
     const cat = categoryOf(p) || kindLabel(p.k);
     if (cat) bits.push(`type=${cat}`);
     if (p.rt) bits.push(`rating=${p.rt}`);
     const where = [p.ct, p.s, p.c].filter(Boolean).join(', ');
     if (where) bits.push(`where=${where}`);
-    if (p.m) bits.push(`note="${p.m.replace(/\s+/g, ' ')}"`);
+    if (d.pr) bits.push(`price=${d.pr}`);
+    if (d.hw) bits.push(`hours=${d.hw}`);
+    if (p.m) bits.push(`my_note="${p.m.replace(/\s+/g, ' ')}"`);
+    if (d.ed) bits.push(`about="${d.ed}"`);
+    if (d.rv) bits.push(`a_review="${d.rv}"`);
     return bits.join(' | ');
   }).join('\n');
 }
@@ -672,6 +773,9 @@ async function ask() {
     : `Here are the ${shown} saved places in view:`;
 
   setAsking(true);
+  // The digest is a one-off ~300 KB fetch, so say so rather than looking stalled.
+  out.textContent = state.digest ? `Asking ${provider.label}…` : 'Loading place details…';
+  await loadDigest();
   out.textContent = `Asking ${provider.label}…`;
   // Announce once on completion rather than on every streamed token.
   out.setAttribute('aria-busy', 'true');

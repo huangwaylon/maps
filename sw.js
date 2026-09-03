@@ -1,7 +1,9 @@
 // Offline + instant repeat loads. The data file is the expensive part of a cold
 // start (~160 KB gzipped over a mobile link), so serve it from cache first and
 // refresh it in the background.
-const VERSION = 'places-v1';
+// Bump on any change to the data schema or the shell, so a stale cached app.js
+// can never be paired with a fresh places.json of a different shape.
+const VERSION = 'places-v2';
 const SHELL = ['./', 'index.html', 'app.css', 'app.js', 'data/places.json'];
 
 self.addEventListener('install', (e) => {

@@ -10,8 +10,9 @@ run at any point only ever costs the places that were in flight.
   python3 tools/extract_details.py --limit 20         # smoke test
   python3 tools/extract_details.py --report           # coverage of what we have
 
-Each place costs 4 HTTP requests (2 locales x [place page + RPC]); --rps limits
-HTTP requests, not places, so the effective place rate is rps/4.
+Each place costs 2 HTTP requests (one RPC per locale — fetch_place builds the
+pb from a static template, so no place-page load is needed). --rps limits HTTP
+requests, not places, so the effective place rate is rps/2.
 """
 import argparse
 import json
@@ -100,7 +101,7 @@ def fetch_one(p, retries=3):
             try:
                 doc = fetch(p['fid'], p['lat'], p['lng'], hl, gl)
                 if doc is None:
-                    raise RuntimeError("no preload token / empty RPC")
+                    raise RuntimeError("empty or non-JSON RPC response")
                 rec[name] = parse(doc)
                 last = None
                 break

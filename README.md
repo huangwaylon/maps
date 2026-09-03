@@ -17,8 +17,9 @@ and natural-language questions are the whole point.
   AND-ed; name matches rank above note and category matches.
 - **Browse** — filter chips derived from the data (country, type, region) and
   sort by recently added, oldest, name, nearest (geolocation) or shuffle.
-- **Details** — tap a row for address, rating, review count, category, today's
-  hours, phone and website, in English with Japanese where it differs.
+- **Details** — tap a row for address, rating, a 1–5★ histogram, Google's own
+  summary, the full week's hours, three real reviews, price band, phone and
+  website, in English with Japanese where it differs.
 - **Ask** — natural-language questions answered over the places currently in
   view. Bring your own **Gemini** or **Anthropic** key; see the caveats.
 
@@ -34,6 +35,7 @@ and JS does not. The design follows from that:
 | Facet counts computed once, not per chip tap | 3 full passes removed from every filter click |
 | `content-visibility: auto` on rows | off-screen rows skip layout and paint |
 | Service worker, stale-while-revalidate | repeat opens are instant, and it works offline |
+| Review text and blurbs kept out of both | a 40-place question can touch every shard, so model context comes from one small `digest.json` fetched on first Ask |
 
 Deliberately **not** done: precomputing the folded search index. Folding all
 3,238 records costs only ~14 ms, so shipping it would add bytes to the thing
@@ -52,10 +54,38 @@ git add data && git commit -m "Refresh places" && git push
 
 `tools/fetch_list.py` reads the shared list through the undocumented
 `/maps/preview/entitylist/getlist` endpoint that Google Maps' own web client
-calls — one request returns all 3,238 places with coordinates.
-`tools/extract_details.py` then fetches each place twice (English and Japanese)
-for categories, rating, review count, hours, phone and website, appending to a
-JSONL log so an interrupted run resumes where it stopped.
+calls — one request returns every place with coordinates.
+`tools/extract_details.py` then fetches each place once per locale (English and
+Japanese), appending to a JSONL log so an interrupted run resumes where it
+stopped.
+
+Two things make the detail fetch work, both established empirically and both
+easy to get wrong:
+
+- **An anonymous `NID` cookie is required, and it must be warmed.** With no
+  cookie the same request returns a "limited view of Google Maps" payload —
+  22 KB, one day of hours, no reviews, no histogram, no price. Sending the
+  throwaway `NID` that a bare `GET https://www.google.com/` hands any visitor
+  raises it to 120–280 KB with all of that. A brand-new `NID` is still not
+  enough: the *first* call with it returns the limited payload and only the
+  second returns the full one, so `anon_cookie()` loads `/maps` once to warm it.
+  No sign-in is involved anywhere.
+- **The `pb` mask is a static template.** Only the FID and the coordinates vary,
+  and the `!14m3!1s…!7e81` session-token block is not validated — only its
+  presence gates reviews. So there is no need to load the place page first,
+  which halves the request count.
+
+Google still serves the limited variant for a minority of requests, so
+`fetch_place.is_limited()` detects it (a place with a rating always has a
+histogram) and retries. Those retries multiply load: at `--rps 6` the failure
+rate climbed to 17%, so the default is deliberately gentle. Failed places are
+written as auditable `{"error": ...}` lines and are skipped on resume, so a
+repair pass means stripping them first:
+
+```sh
+grep -v '"error"' data/details.jsonl > tmp && mv tmp data/details.jsonl
+python3 tools/extract_details.py        # picks up only what is missing
+```
 
 `tools/build_data.py` merges the two and derives:
 
@@ -66,6 +96,8 @@ JSONL log so an interrupted run resumes where it stopped.
   Japanese transliterations of foreign provinces.
 - **type** — from the real Google category where one exists, falling back to
   name keywords. `other` is down to ~20% from 61% once real categories landed.
+- **review count** — from `P[4][8]`, not `P[37][1]`. The latter is roughly 4x
+  larger and does not match the UI; `P[4][8]` equals the histogram sum exactly.
 - **romaji aliases** — prefecture and city names, search-only.
 
 Note `fold()` exists in both `tools/build_data.py` and `app.js` and must agree.
@@ -86,9 +118,11 @@ only if you need to rebuild them.
   not a supported API and scraping it is against Google's Terms of Service. It
   can change shape without notice; the fetchers return `None` rather than wrong
   data when it does.
-- **Price, full-week hours and review text are not available anonymously.** They
-  exist in an authenticated response but not an anonymous one, regardless of the
-  request mask — so they are absent here.
+- **There is no place-level price field.** The `¥1,000–2,000` style bands come
+  from what individual reviewers reported paying, so they are a signal, not an
+  official price level. The per-review "aspect" block is deliberately not
+  extracted: its labels are questionnaire prompts and its integers are section
+  indices, not scores.
 - **Snapshot staleness.** Venues close and move. Nothing re-validates.
 - **Your API key sits in `localStorage`** on a public page, and calls go straight
   from the browser to the provider. Use a key you are willing to rotate.
@@ -96,14 +130,17 @@ only if you need to rebuild them.
   from 2 s to 90 s, and it returns 429 once a daily cap is hit. Requests time out
   after 60 s of silence rather than hanging.
 - **Ask sees at most 40 places per question.** The search and filter UI is the
-  retrieval step — narrow the view and answers improve.
+  retrieval step — narrow the view and answers improve. The first question of a
+  session also downloads `digest.json` (~300 KB gzipped, then cached), which is
+  what lets the model quote hours, price and a real review or blurb.
 
 ## Layout
 
 ```
 index.html  app.css  app.js  sw.js     the site
 data/places.json                       search + browse payload (committed)
-data/details/NNN.json                  per-place detail shards (committed)
+data/details/NNN.json                  per-place detail shards, for the sheet
+data/digest.json                       compact per-place text, for the model
 tools/fetch_list.py                    list → all places with coordinates
 tools/extract_details.py               per-place detail, bilingual, resumable
 tools/build_data.py                    merge + derive facets → data/

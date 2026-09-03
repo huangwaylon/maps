@@ -288,34 +288,109 @@ def detail_for(place, details):
     return details.get(place.get("gid")) or details.get(place.get("fid"))
 
 
-SHARD_SIZE = 250   # places per detail shard; ~13 files, each a small fetch
+SHARD_SIZE = 250            # places per detail shard; ~13 files, each a small fetch
+REVIEWS_PER_PLACE = 3       # reviews kept in a shard, for the detail sheet
+REVIEW_CHARS = 420          # per-review clip in a shard
+DIGEST_EDITORIAL_CHARS = 200
+DIGEST_REVIEW_CHARS = 240
 
 
 def first(seq):
     return seq[0] if isinstance(seq, list) and seq else None
 
 
+def clip(text, n):
+    """Trim to n chars on a word boundary where possible."""
+    if not text:
+        return None
+    text = " ".join(str(text).split())
+    if len(text) <= n:
+        return text
+    cut = text[:n]
+    space = cut.rfind(" ")
+    return (cut[:space] if space > n * 0.6 else cut).rstrip(" ,.;:") + "…"
+
+
 def shard_record(det):
-    """Compact per-place detail, English with Japanese only where it differs."""
+    """Full per-place detail for the sheet. English, with Japanese where it differs."""
     en, ja = det.get("en") or {}, det.get("ja") or {}
-    keep = lambda a, b: b if (b and b != a) else None
+    differs = lambda a, b: b if (b and b != a) else None
+    reviews = [{k: v for k, v in {
+        "a": r.get("author"), "s": r.get("stars"),
+        "w": r.get("when"), "t": clip(r.get("text"), REVIEW_CHARS),
+    }.items() if v} for r in (en.get("reviews") or [])[:REVIEWS_PER_PLACE]]
+
     return {k: v for k, v in {
         "a":    en.get("address"),
-        "aj":   keep(en.get("address"), ja.get("address")),
+        "aj":   differs(en.get("address"), ja.get("address")),
         "nb":   en.get("neighborhood"),
         "cat":  en.get("categories") or None,
-        "catj": keep(en.get("categories"), ja.get("categories")),
+        "catj": differs(en.get("categories"), ja.get("categories")),
         "rt":   en.get("rating"),
         "rc":   en.get("review_count"),
+        "hist": en.get("rating_histogram"),
+        "pr":   en.get("price_reported"),
+        "ed":   clip(en.get("editorial"), 400),
+        "edj":  differs(clip(en.get("editorial"), 400), clip(ja.get("editorial"), 400)),
+        "rv":   reviews or None,
         "ph":   en.get("phone"),
         "w":    en.get("website"),
-        "ht":   en.get("hours_today") or None,
+        "hw":   en.get("hours_week"),
         "st":   en.get("status"),
-        "stj":  keep(en.get("status"), ja.get("status")),
+        "stj":  differs(en.get("status"), ja.get("status")),
         "tz":   en.get("timezone"),
         "img":  (en.get("photo_urls") or [None])[0],
         "book": (en.get("booking_links") or [None])[0],
     }.items() if v not in (None, [], "")}
+
+
+def digest_record(det):
+    """Compact text for the model: the fields that actually change an answer.
+
+    Kept separate from both places.json and the shards. A 40-place question can
+    touch every detail shard, so the model context cannot be assembled from
+    them, and this text is far too big to sit in the initial download.
+
+    A review snippet is included only where Google has no editorial blurb (~35%
+    of places). The two say similar things, and carrying both everywhere costs
+    ~440 KB gzipped against ~310 KB for the complementary version.
+    """
+    en = det.get("en") or {}
+    editorial = clip(en.get("editorial"), DIGEST_EDITORIAL_CHARS)
+    review = None
+    if not editorial:
+        best = max((en.get("reviews") or []),
+                   key=lambda r: len(r.get("text") or ""), default=None)
+        if best:
+            review = clip(best.get("text"), DIGEST_REVIEW_CHARS)
+    return {k: v for k, v in {
+        "ed": editorial,
+        "rv": review,
+        "pr": (en.get("price_reported") or [None])[0],
+        "hw": summarise_hours(en.get("hours_week")),
+    }.items() if v}
+
+
+def summarise_hours(week):
+    """One short line, e.g. 'Mon-Fri 11 AM-8 PM; Sat-Sun closed'-ish.
+
+    Collapses consecutive days that share the same hours so the model sees the
+    shape of the week in a few tokens rather than seven lines.
+    """
+    if not week:
+        return None
+    runs = []
+    for day, spans in week:
+        label = ", ".join(spans) if spans else "closed"
+        if runs and runs[-1][1] == label:
+            runs[-1][0].append(day[:3])
+        else:
+            runs.append(([day[:3]], label))
+    parts = []
+    for days, label in runs:
+        span = days[0] if len(days) == 1 else "%s-%s" % (days[0], days[-1])
+        parts.append("%s %s" % (span, label))
+    return clip("; ".join(parts), 120)
 
 
 def main():
@@ -334,7 +409,7 @@ def main():
     # Intern category strings: they repeat heavily across 3k places, and an
     # index costs a few bytes where the string costs tens.
     cats, cat_index = [], {}
-    shards, enriched = {}, 0
+    shards, digest, enriched = {}, {}, 0
 
     for i, place in enumerate(places):
         # Pop both before looking up: `a or b` short-circuits, so popping
@@ -363,6 +438,10 @@ def main():
 
         if rec:
             shards.setdefault(i // SHARD_SIZE, {})[str(i)] = rec
+        if det:
+            entry = digest_record(det)
+            if entry:
+                digest[str(i)] = entry
 
     # Precomputed name order: localeCompare over 3k rows costs ~170ms on a
     # throttled phone, and it never changes, so do it here instead.
@@ -376,6 +455,9 @@ def main():
     for shard, rec in shards.items():
         with open("data/details/%03d.json" % shard, "w") as f:
             json.dump(rec, f, ensure_ascii=False, separators=(",", ":"))
+
+    with open("data/digest.json", "w") as f:
+        json.dump(digest, f, ensure_ascii=False, separators=(",", ":"))
 
     out = {
         "list_name": src["list_name"],
@@ -394,8 +476,10 @@ def main():
     shard_kb = sum(kb("data/details/" + f) for f in os.listdir("data/details"))
     print("wrote data/places.json: %d places, %.0f KB (%d enriched, %d categories)"
           % (len(places), kb("data/places.json"), enriched, len(cats)), file=sys.stderr)
-    print("wrote %d detail shards: %.0f KB total"
-          % (len(shards), shard_kb), file=sys.stderr)
+    print("wrote %d detail shards: %.0f KB total" % (len(shards), shard_kb),
+          file=sys.stderr)
+    print("wrote data/digest.json: %d entries, %.0f KB"
+          % (len(digest), kb("data/digest.json")), file=sys.stderr)
 
 
 if __name__ == "__main__":
