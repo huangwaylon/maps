@@ -2,6 +2,10 @@
 
 *, *::before, *::after { box-sizing: border-box; }
 
+/* Author `display` declarations outrank the UA sheet's `[hidden]` rule, so
+   toggling the `hidden` attribute needs this to actually hide anything. */
+[hidden] { display: none !important; }
+
 :root {
   --bg: #f6f6f4;
   --surface: #fff;
@@ -292,7 +296,11 @@ body {
   background: var(--line); cursor: pointer;
 }
 .sheet__panel h2 { margin: 0; font-size: 20px; line-height: 1.25; overflow-wrap: anywhere; }
-.sheet__meta { margin: 6px 0 0; font-size: 13px; color: var(--ink-dim); }
+.sheet__meta {
+  margin: 6px 0 0;
+  font-size: 13px; color: var(--ink-dim);
+  white-space: pre-line; /* the "added by" line is joined with \n */
+}
 .sheet__note {
   margin: 12px 0 0; padding-left: 10px;
   border-left: 2px solid var(--accent-soft);
