@@ -288,7 +288,10 @@ def detail_for(place, details):
     return details.get(place.get("gid")) or details.get(place.get("fid"))
 
 
-SHARD_SIZE = 250            # places per detail shard; ~13 files, each a small fetch
+# Places per detail shard. Sized so one card tap costs ~55 KB gzipped rather
+# than the ~225 KB a 250-place shard costs once reviews are included. The client
+# reads this value from places.json, so it adapts automatically.
+SHARD_SIZE = 60
 REVIEWS_PER_PLACE = 3       # reviews kept in a shard, for the detail sheet
 REVIEW_CHARS = 420          # per-review clip in a shard
 DIGEST_EDITORIAL_CHARS = 200
